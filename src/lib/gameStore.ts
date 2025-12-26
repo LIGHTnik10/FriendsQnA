@@ -1,7 +1,12 @@
-import { GameState, Player, Vote, getRandomQuestions } from "@/types/game";
+import { kv } from "@vercel/kv";
+import { GameState, Player, getRandomQuestions } from "@/types/game";
 
-// In-memory store (works for demo, for production use Vercel KV or database)
-const games = new Map<string, GameState>();
+const GAME_PREFIX = "game:";
+const GAME_TTL = 3600; // 1 hour expiry
+
+function gameKey(lobbyCode: string): string {
+  return `${GAME_PREFIX}${lobbyCode}`;
+}
 
 export function createGameState(lobbyCode: string): GameState {
   return {
@@ -16,21 +21,25 @@ export function createGameState(lobbyCode: string): GameState {
   };
 }
 
-export function getGame(lobbyCode: string): GameState | null {
-  return games.get(lobbyCode) || null;
+export async function getGame(lobbyCode: string): Promise<GameState | null> {
+  return await kv.get<GameState>(gameKey(lobbyCode));
 }
 
-export function createOrJoinGame(
+async function saveGame(game: GameState): Promise<void> {
+  await kv.set(gameKey(game.lobbyCode), game, { ex: GAME_TTL });
+}
+
+export async function createOrJoinGame(
   lobbyCode: string,
   playerId: string,
   playerName: string,
   isHost: boolean
-): GameState {
-  if (!games.has(lobbyCode)) {
-    games.set(lobbyCode, createGameState(lobbyCode));
-  }
+): Promise<GameState> {
+  let game = await getGame(lobbyCode);
 
-  const game = games.get(lobbyCode)!;
+  if (!game) {
+    game = createGameState(lobbyCode);
+  }
 
   // Check if player already exists
   const existingPlayer = game.players.find((p) => p.id === playerId);
@@ -43,11 +52,12 @@ export function createOrJoinGame(
     game.players.push(player);
   }
 
+  await saveGame(game);
   return game;
 }
 
-export function startGame(lobbyCode: string): GameState | null {
-  const game = games.get(lobbyCode);
+export async function startGame(lobbyCode: string): Promise<GameState | null> {
+  const game = await getGame(lobbyCode);
   if (!game || game.players.length < 2) return null;
 
   game.phase = "question-select";
@@ -60,25 +70,27 @@ export function startGame(lobbyCode: string): GameState | null {
     votes: [],
   };
 
+  await saveGame(game);
   return game;
 }
 
-export function submitQuestion(lobbyCode: string, question: string): GameState | null {
-  const game = games.get(lobbyCode);
+export async function submitQuestion(lobbyCode: string, question: string): Promise<GameState | null> {
+  const game = await getGame(lobbyCode);
   if (!game || !game.currentRound) return null;
 
   game.currentRound.question = question;
   game.phase = "voting";
 
+  await saveGame(game);
   return game;
 }
 
-export function submitVote(
+export async function submitVote(
   lobbyCode: string,
   voterId: string,
   votedForId: string
-): GameState | null {
-  const game = games.get(lobbyCode);
+): Promise<GameState | null> {
+  const game = await getGame(lobbyCode);
   if (!game || !game.currentRound) return null;
 
   // Check if already voted
@@ -92,6 +104,7 @@ export function submitVote(
     calculateResults(game);
   }
 
+  await saveGame(game);
   return game;
 }
 
@@ -122,9 +135,9 @@ function calculateResults(game: GameState) {
   game.resultsShownAt = Date.now();
 }
 
-export function checkAndAdvanceRound(lobbyCode: string): GameState | null {
-  const game = games.get(lobbyCode);
-  if (!game || game.phase !== "results" || !game.resultsShownAt) return game || null;
+export async function checkAndAdvanceRound(lobbyCode: string): Promise<GameState | null> {
+  const game = await getGame(lobbyCode);
+  if (!game || game.phase !== "results" || !game.resultsShownAt) return game;
 
   // Check if 15 seconds have passed
   if (Date.now() - game.resultsShownAt >= 15000) {
@@ -138,30 +151,13 @@ export function checkAndAdvanceRound(lobbyCode: string): GameState | null {
       votes: [],
     };
     game.resultsShownAt = null;
+    await saveGame(game);
   }
 
   return game;
 }
 
-export function endGame(lobbyCode: string): boolean {
-  return games.delete(lobbyCode);
-}
-
-export function removePlayer(lobbyCode: string, playerId: string): GameState | null {
-  const game = games.get(lobbyCode);
-  if (!game) return null;
-
-  game.players = game.players.filter((p) => p.id !== playerId);
-
-  if (game.players.length === 0) {
-    games.delete(lobbyCode);
-    return null;
-  }
-
-  // Reassign host if needed
-  if (!game.players.some((p) => p.isHost)) {
-    game.players[0].isHost = true;
-  }
-
-  return game;
+export async function endGame(lobbyCode: string): Promise<boolean> {
+  await kv.del(gameKey(lobbyCode));
+  return true;
 }

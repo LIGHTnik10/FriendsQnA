@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getGame,
   createOrJoinGame,
   startGame,
   submitQuestion,
@@ -18,7 +17,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Check and advance round if in results phase
-  const game = checkAndAdvanceRound(lobbyCode);
+  const game = await checkAndAdvanceRound(lobbyCode);
 
   if (!game) {
     return NextResponse.json({ error: "Game not found" }, { status: 404 });
@@ -36,7 +35,7 @@ export async function POST(request: NextRequest) {
       if (!lobbyCode || !playerId || !playerName) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
       }
-      const game = createOrJoinGame(lobbyCode, playerId, playerName, isHost);
+      const game = await createOrJoinGame(lobbyCode, playerId, playerName, isHost);
       return NextResponse.json(game);
     }
 
@@ -44,7 +43,7 @@ export async function POST(request: NextRequest) {
       if (!lobbyCode) {
         return NextResponse.json({ error: "Lobby code required" }, { status: 400 });
       }
-      const game = startGame(lobbyCode);
+      const game = await startGame(lobbyCode);
       if (!game) {
         return NextResponse.json({ error: "Cannot start game" }, { status: 400 });
       }
@@ -55,7 +54,7 @@ export async function POST(request: NextRequest) {
       if (!lobbyCode || !question) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
       }
-      const game = submitQuestion(lobbyCode, question);
+      const game = await submitQuestion(lobbyCode, question);
       if (!game) {
         return NextResponse.json({ error: "Cannot submit question" }, { status: 400 });
       }
@@ -66,7 +65,7 @@ export async function POST(request: NextRequest) {
       if (!lobbyCode || !playerId || !votedForId) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
       }
-      const game = submitVote(lobbyCode, playerId, votedForId);
+      const game = await submitVote(lobbyCode, playerId, votedForId);
       if (!game) {
         return NextResponse.json({ error: "Cannot submit vote" }, { status: 400 });
       }
@@ -77,7 +76,7 @@ export async function POST(request: NextRequest) {
       if (!lobbyCode) {
         return NextResponse.json({ error: "Lobby code required" }, { status: 400 });
       }
-      endGame(lobbyCode);
+      await endGame(lobbyCode);
       return NextResponse.json({ success: true });
     }
 
