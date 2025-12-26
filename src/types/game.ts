@@ -30,6 +30,8 @@ export interface GameState {
   currentRound: Round | null;
   currentQuestionerIndex: number;
   roundNumber: number;
+  questionOptions: string[];
+  resultsShownAt: number | null;
 }
 
 export const DEFAULT_QUESTIONS = [

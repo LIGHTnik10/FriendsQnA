@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback, use } from "react";
+import { useEffect, useState, useCallback, use, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
-import { getSocket, disconnectSocket } from "@/lib/socket";
 import { GameState, Player, RoundResults } from "@/types/game";
 
 interface PageProps {
@@ -20,63 +19,78 @@ export default function GamePage({ params }: PageProps) {
   const isHost = searchParams.get("host") === "true";
 
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const [questionOptions, setQuestionOptions] = useState<string[]>([]);
   const [customQuestion, setCustomQuestion] = useState("");
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [hasVoted, setHasVoted] = useState(false);
-  const [voteCount, setVoteCount] = useState({ count: 0, total: 0 });
   const [resultsTimer, setResultsTimer] = useState(15);
   const [connected, setConnected] = useState(false);
+  const [gameEnded, setGameEnded] = useState(false);
+  const lastPhaseRef = useRef<string>("");
 
   const currentPlayer = gameState?.players.find((p) => p.id === playerId);
   const isCurrentPlayerHost = currentPlayer?.isHost || false;
   const isQuestioner = gameState?.currentRound?.questionerId === playerId;
 
+  // Join game on mount
   useEffect(() => {
-    const socket = getSocket();
-
-    socket.on("connect", () => {
-      setConnected(true);
-      socket.emit("join-lobby", {
-        lobbyCode,
-        playerName,
-        playerId,
-        isHost,
-      });
-    });
-
-    socket.on("game-state", (state: GameState) => {
-      setGameState(state);
-      if (state.phase === "voting") {
-        setHasVoted(false);
+    const joinGame = async () => {
+      try {
+        const res = await fetch("/api/game", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "join",
+            lobbyCode,
+            playerId,
+            playerName,
+            isHost,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setGameState(data);
+          setConnected(true);
+        }
+      } catch (error) {
+        console.error("Failed to join game:", error);
       }
-      if (state.phase === "results") {
-        setResultsTimer(15);
-      }
-    });
-
-    socket.on("question-options", ({ questions }: { questions: string[] }) => {
-      setQuestionOptions(questions);
-      setShowCustomInput(false);
-      setCustomQuestion("");
-    });
-
-    socket.on("vote-count", (data: { count: number; total: number }) => {
-      setVoteCount(data);
-    });
-
-    socket.on("game-ended", () => {
-      router.push("/");
-    });
-
-    socket.on("error", ({ message }: { message: string }) => {
-      alert(message);
-    });
-
-    return () => {
-      disconnectSocket();
     };
-  }, [lobbyCode, playerName, playerId, isHost, router]);
+    joinGame();
+  }, [lobbyCode, playerId, playerName, isHost]);
+
+  // Poll for game state updates
+  useEffect(() => {
+    if (!connected || gameEnded) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/game?lobbyCode=${lobbyCode}`);
+        if (res.ok) {
+          const data = await res.json();
+          setGameState(data);
+
+          // Reset hasVoted when phase changes to voting
+          if (data.phase === "voting" && lastPhaseRef.current !== "voting") {
+            setHasVoted(false);
+          }
+
+          // Reset timer when entering results phase
+          if (data.phase === "results" && lastPhaseRef.current !== "results") {
+            setResultsTimer(15);
+          }
+
+          lastPhaseRef.current = data.phase;
+        } else if (res.status === 404) {
+          setGameEnded(true);
+          router.push("/");
+        }
+      } catch (error) {
+        console.error("Failed to fetch game state:", error);
+      }
+    }, 1000);
+
+    return () => clearInterval(pollInterval);
+  }, [connected, lobbyCode, gameEnded, router]);
 
   // Results countdown timer
   useEffect(() => {
@@ -86,33 +100,78 @@ export default function GamePage({ params }: PageProps) {
     }
   }, [gameState?.phase, resultsTimer]);
 
-  const startGame = useCallback(() => {
-    const socket = getSocket();
-    socket.emit("start-game", { lobbyCode });
+  const startGame = useCallback(async () => {
+    try {
+      const res = await fetch("/api/game", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start", lobbyCode }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setGameState(data);
+      } else {
+        const error = await res.json();
+        alert(error.error || "Failed to start game");
+      }
+    } catch (error) {
+      console.error("Failed to start game:", error);
+    }
   }, [lobbyCode]);
 
   const submitQuestion = useCallback(
-    (question: string) => {
-      const socket = getSocket();
-      socket.emit("submit-question", { lobbyCode, question });
+    async (question: string) => {
+      try {
+        const res = await fetch("/api/game", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "submit-question", lobbyCode, question }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setGameState(data);
+        }
+      } catch (error) {
+        console.error("Failed to submit question:", error);
+      }
     },
     [lobbyCode]
   );
 
   const submitVote = useCallback(
-    (votedForId: string) => {
+    async (votedForId: string) => {
       if (hasVoted) return;
-      const socket = getSocket();
-      socket.emit("submit-vote", { lobbyCode, voterId: playerId, votedForId });
-      setHasVoted(true);
+      try {
+        const res = await fetch("/api/game", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "vote", lobbyCode, playerId, votedForId }),
+        });
+        if (res.ok) {
+          setHasVoted(true);
+          const data = await res.json();
+          setGameState(data);
+        }
+      } catch (error) {
+        console.error("Failed to submit vote:", error);
+      }
     },
     [lobbyCode, playerId, hasVoted]
   );
 
-  const endGame = useCallback(() => {
-    const socket = getSocket();
-    socket.emit("end-game", { lobbyCode });
-  }, [lobbyCode]);
+  const endGame = useCallback(async () => {
+    try {
+      await fetch("/api/game", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "end", lobbyCode }),
+      });
+      setGameEnded(true);
+      router.push("/");
+    } catch (error) {
+      console.error("Failed to end game:", error);
+    }
+  }, [lobbyCode, router]);
 
   if (!connected || !gameState) {
     return (
@@ -162,7 +221,7 @@ export default function GamePage({ params }: PageProps) {
       {gameState.phase === "question-select" && (
         <QuestionSelectPhase
           isQuestioner={isQuestioner}
-          questionOptions={questionOptions}
+          questionOptions={gameState.questionOptions}
           customQuestion={customQuestion}
           showCustomInput={showCustomInput}
           questioner={gameState.players.find(
@@ -181,7 +240,10 @@ export default function GamePage({ params }: PageProps) {
           question={gameState.currentRound.question}
           players={gameState.players}
           hasVoted={hasVoted}
-          voteCount={voteCount}
+          voteCount={{
+            count: gameState.currentRound.votes.length,
+            total: gameState.players.length,
+          }}
           onVote={submitVote}
         />
       )}
