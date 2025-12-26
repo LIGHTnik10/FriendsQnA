@@ -183,7 +183,7 @@ export default function GamePage({ params }: PageProps) {
 
   const joinUrl =
     typeof window !== "undefined"
-      ? `${window.location.origin}/game/${lobbyCode}`
+      ? `${window.location.origin}/join?code=${lobbyCode}`
       : "";
 
   return (
