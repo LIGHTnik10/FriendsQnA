@@ -14,7 +14,7 @@ export default function GamePage({ params }: PageProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const playerName = searchParams.get("name") || "Player";
+  const playerName = searchParams.get("name") || "";
   const playerId = searchParams.get("playerId") || "";
   const isHost = searchParams.get("host") === "true";
 
@@ -25,14 +25,24 @@ export default function GamePage({ params }: PageProps) {
   const [resultsTimer, setResultsTimer] = useState(15);
   const [connected, setConnected] = useState(false);
   const [gameEnded, setGameEnded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const lastPhaseRef = useRef<string>("");
 
   const currentPlayer = gameState?.players.find((p) => p.id === playerId);
   const isCurrentPlayerHost = currentPlayer?.isHost || false;
   const isQuestioner = gameState?.currentRound?.questionerId === playerId;
 
+  // Redirect to join page if missing required params
+  useEffect(() => {
+    if (!playerId || !playerName) {
+      router.replace(`/join?code=${lobbyCode}`);
+    }
+  }, [playerId, playerName, lobbyCode, router]);
+
   // Join game on mount
   useEffect(() => {
+    if (!playerId || !playerName) return;
+
     const joinGame = async () => {
       try {
         const res = await fetch("/api/game", {
@@ -50,9 +60,13 @@ export default function GamePage({ params }: PageProps) {
           const data = await res.json();
           setGameState(data);
           setConnected(true);
+        } else {
+          const errData = await res.json();
+          setError(errData.error || "Failed to join game");
         }
-      } catch (error) {
-        console.error("Failed to join game:", error);
+      } catch (err) {
+        console.error("Failed to join game:", err);
+        setError("Connection failed. Please try again.");
       }
     };
     joinGame();
@@ -172,6 +186,20 @@ export default function GamePage({ params }: PageProps) {
       console.error("Failed to end game:", error);
     }
   }, [lobbyCode, router]);
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-4">
+        <div className="text-red-400 text-xl mb-4">{error}</div>
+        <button
+          onClick={() => router.push("/")}
+          className="px-6 py-3 bg-white/20 hover:bg-white/30 text-white rounded-xl"
+        >
+          Go Home
+        </button>
+      </div>
+    );
+  }
 
   if (!connected || !gameState) {
     return (
