@@ -133,6 +133,44 @@ export default function GamePage({ params }: PageProps) {
     }
   }, [lobbyCode]);
 
+  const addPhantomPlayer = useCallback(
+    async (name: string) => {
+      try {
+        const res = await fetch("/api/game", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "add-phantom", lobbyCode, playerName: name }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setGameState(data);
+        }
+      } catch (error) {
+        console.error("Failed to add player:", error);
+      }
+    },
+    [lobbyCode]
+  );
+
+  const removePhantomPlayer = useCallback(
+    async (phantomPlayerId: string) => {
+      try {
+        const res = await fetch("/api/game", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "remove-phantom", lobbyCode, playerId: phantomPlayerId }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setGameState(data);
+        }
+      } catch (error) {
+        console.error("Failed to remove player:", error);
+      }
+    },
+    [lobbyCode]
+  );
+
   const submitQuestion = useCallback(
     async (question: string) => {
       try {
@@ -214,6 +252,9 @@ export default function GamePage({ params }: PageProps) {
       ? `${window.location.origin}/join?code=${lobbyCode}`
       : "";
 
+  // Count only real players for voting
+  const realPlayers = gameState.players.filter((p) => !p.isPhantom);
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-4">
       {/* Header */}
@@ -242,6 +283,8 @@ export default function GamePage({ params }: PageProps) {
           lobbyCode={lobbyCode}
           joinUrl={joinUrl}
           onStartGame={startGame}
+          onAddPhantom={addPhantomPlayer}
+          onRemovePhantom={removePhantomPlayer}
         />
       )}
 
@@ -270,7 +313,7 @@ export default function GamePage({ params }: PageProps) {
           hasVoted={hasVoted}
           voteCount={{
             count: gameState.currentRound.votes.length,
-            total: gameState.players.length,
+            total: realPlayers.length,
           }}
           onVote={submitVote}
         />
@@ -296,13 +339,31 @@ function LobbyPhase({
   lobbyCode,
   joinUrl,
   onStartGame,
+  onAddPhantom,
+  onRemovePhantom,
 }: {
   players: Player[];
   isHost: boolean;
   lobbyCode: string;
   joinUrl: string;
   onStartGame: () => void;
+  onAddPhantom: (name: string) => void;
+  onRemovePhantom: (playerId: string) => void;
 }) {
+  const [newPlayerName, setNewPlayerName] = useState("");
+  const [showAddPlayer, setShowAddPlayer] = useState(false);
+
+  const realPlayers = players.filter((p) => !p.isPhantom);
+  const phantomPlayers = players.filter((p) => p.isPhantom);
+
+  const handleAddPlayer = () => {
+    if (newPlayerName.trim()) {
+      onAddPhantom(newPlayerName.trim());
+      setNewPlayerName("");
+      setShowAddPlayer(false);
+    }
+  };
+
   return (
     <div className="max-w-md mx-auto space-y-6">
       <div className="text-center">
@@ -322,37 +383,101 @@ function LobbyPhase({
       {/* Players List */}
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6">
         <h3 className="text-white font-semibold mb-4">
-          Players ({players.length})
+          Players ({realPlayers.length} playing{phantomPlayers.length > 0 ? `, ${phantomPlayers.length} extra` : ""})
         </h3>
         <div className="space-y-2">
           {players.map((player) => (
             <div
               key={player.id}
-              className="flex items-center justify-between bg-white/10 rounded-xl px-4 py-3"
+              className={`flex items-center justify-between rounded-xl px-4 py-3 ${
+                player.isPhantom ? "bg-purple-500/20" : "bg-white/10"
+              }`}
             >
-              <span className="text-white">{player.name}</span>
-              {player.isHost && (
-                <span className="text-xs bg-yellow-500 text-yellow-900 px-2 py-1 rounded-full font-semibold">
-                  HOST
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                <span className="text-white">{player.name}</span>
+                {player.isPhantom && (
+                  <span className="text-xs bg-purple-500/50 text-purple-200 px-2 py-0.5 rounded-full">
+                    extra
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {player.isHost && (
+                  <span className="text-xs bg-yellow-500 text-yellow-900 px-2 py-1 rounded-full font-semibold">
+                    HOST
+                  </span>
+                )}
+                {player.isPhantom && isHost && (
+                  <button
+                    onClick={() => onRemovePhantom(player.id)}
+                    className="text-red-400 hover:text-red-300 text-sm px-2"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
+
+        {/* Add Extra Player (Host Only) */}
+        {isHost && (
+          <div className="mt-4 pt-4 border-t border-white/10">
+            {!showAddPlayer ? (
+              <button
+                onClick={() => setShowAddPlayer(true)}
+                className="w-full py-3 px-4 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 rounded-xl transition-all border border-dashed border-purple-500/30 text-sm"
+              >
+                + Add Extra Player (for voting only)
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newPlayerName}
+                  onChange={(e) => setNewPlayerName(e.target.value)}
+                  placeholder="Enter name..."
+                  className="flex-1 px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  onKeyDown={(e) => e.key === "Enter" && handleAddPlayer()}
+                  autoFocus
+                />
+                <button
+                  onClick={handleAddPlayer}
+                  disabled={!newPlayerName.trim()}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm disabled:opacity-50"
+                >
+                  Add
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAddPlayer(false);
+                    setNewPlayerName("");
+                  }}
+                  className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            <p className="text-xs text-gray-400 mt-2">
+              Extra players can be voted on but don&apos;t vote themselves
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Start Button (Host Only) */}
       {isHost && (
         <button
           onClick={onStartGame}
-          disabled={players.length < 2}
+          disabled={realPlayers.length < 2}
           className={`w-full py-4 px-6 font-semibold rounded-xl transition-all ${
-            players.length >= 2
+            realPlayers.length >= 2
               ? "bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-700 hover:to-teal-700 text-white transform hover:scale-105"
               : "bg-gray-600 text-gray-400 cursor-not-allowed"
           }`}
         >
-          {players.length < 2 ? "Need at least 2 players" : "Start Game"}
+          {realPlayers.length < 2 ? "Need at least 2 real players" : "Start Game"}
         </button>
       )}
 
@@ -503,7 +628,11 @@ function VotingPhase({
             <button
               key={player.id}
               onClick={() => onVote(player.id)}
-              className="p-4 bg-white/10 hover:bg-white/20 backdrop-blur-lg rounded-xl text-white transition-all border border-white/20 hover:border-white/40 hover:scale-105"
+              className={`p-4 backdrop-blur-lg rounded-xl text-white transition-all border hover:scale-105 ${
+                player.isPhantom
+                  ? "bg-purple-500/20 border-purple-500/30 hover:bg-purple-500/30 hover:border-purple-500/50"
+                  : "bg-white/10 border-white/20 hover:bg-white/20 hover:border-white/40"
+              }`}
             >
               {player.name}
             </button>

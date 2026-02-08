@@ -1,5 +1,6 @@
 import { kv } from "@vercel/kv";
 import { GameState, Player, getRandomQuestions } from "@/types/game";
+import { v4 as uuidv4 } from "uuid";
 
 const GAME_PREFIX = "game:";
 const GAME_TTL = 3600; // 1 hour expiry
@@ -29,6 +30,28 @@ async function saveGame(game: GameState): Promise<void> {
   await kv.set(gameKey(game.lobbyCode), game, { ex: GAME_TTL });
 }
 
+// Get only real (non-phantom) players
+function getRealPlayers(game: GameState): Player[] {
+  return game.players.filter((p) => !p.isPhantom);
+}
+
+// Get next real player index for questioner rotation
+function getNextQuestionerIndex(game: GameState): number {
+  const realPlayers = getRealPlayers(game);
+  if (realPlayers.length === 0) return 0;
+
+  // Find current questioner's position in real players
+  const currentQuestioner = game.currentRound?.questionerId;
+  const currentIndex = realPlayers.findIndex((p) => p.id === currentQuestioner);
+
+  // Get next real player
+  const nextRealIndex = (currentIndex + 1) % realPlayers.length;
+  const nextPlayer = realPlayers[nextRealIndex];
+
+  // Return index in full players array
+  return game.players.findIndex((p) => p.id === nextPlayer.id);
+}
+
 export async function createOrJoinGame(
   lobbyCode: string,
   playerId: string,
@@ -44,10 +67,12 @@ export async function createOrJoinGame(
   // Check if player already exists
   const existingPlayer = game.players.find((p) => p.id === playerId);
   if (!existingPlayer) {
+    const realPlayers = getRealPlayers(game);
     const player: Player = {
       id: playerId,
       name: playerName,
-      isHost: isHost || game.players.length === 0,
+      isHost: isHost || realPlayers.length === 0,
+      isPhantom: false,
     };
     game.players.push(player);
   }
@@ -56,16 +81,54 @@ export async function createOrJoinGame(
   return game;
 }
 
+export async function addPhantomPlayer(
+  lobbyCode: string,
+  playerName: string
+): Promise<GameState | null> {
+  const game = await getGame(lobbyCode);
+  if (!game || game.phase !== "lobby") return null;
+
+  const player: Player = {
+    id: uuidv4(),
+    name: playerName,
+    isHost: false,
+    isPhantom: true,
+  };
+  game.players.push(player);
+
+  await saveGame(game);
+  return game;
+}
+
+export async function removePhantomPlayer(
+  lobbyCode: string,
+  playerId: string
+): Promise<GameState | null> {
+  const game = await getGame(lobbyCode);
+  if (!game || game.phase !== "lobby") return null;
+
+  game.players = game.players.filter((p) => p.id !== playerId || !p.isPhantom);
+
+  await saveGame(game);
+  return game;
+}
+
 export async function startGame(lobbyCode: string): Promise<GameState | null> {
   const game = await getGame(lobbyCode);
-  if (!game || game.players.length < 2) return null;
+  if (!game) return null;
+
+  const realPlayers = getRealPlayers(game);
+  if (realPlayers.length < 2) return null;
+
+  // Find first real player to be questioner
+  const firstRealPlayerIndex = game.players.findIndex((p) => !p.isPhantom);
 
   game.phase = "question-select";
-  game.currentQuestionerIndex = 0;
+  game.currentQuestionerIndex = firstRealPlayerIndex;
   game.roundNumber = 1;
   game.questionOptions = getRandomQuestions(3);
   game.currentRound = {
-    questionerId: game.players[0].id,
+    questionerId: game.players[firstRealPlayerIndex].id,
     question: "",
     votes: [],
   };
@@ -99,8 +162,9 @@ export async function submitVote(
 
   game.currentRound.votes.push({ voterId, votedForId });
 
-  // Check if all players have voted
-  if (game.currentRound.votes.length === game.players.length) {
+  // Check if all REAL players have voted (phantom players don't vote)
+  const realPlayers = getRealPlayers(game);
+  if (game.currentRound.votes.length === realPlayers.length) {
     calculateResults(game);
   }
 
@@ -141,12 +205,14 @@ export async function checkAndAdvanceRound(lobbyCode: string): Promise<GameState
 
   // Check if 15 seconds have passed
   if (Date.now() - game.resultsShownAt >= 15000) {
-    game.currentQuestionerIndex = (game.currentQuestionerIndex + 1) % game.players.length;
+    // Get next real player as questioner
+    const nextIndex = getNextQuestionerIndex(game);
+    game.currentQuestionerIndex = nextIndex;
     game.roundNumber++;
     game.phase = "question-select";
     game.questionOptions = getRandomQuestions(3);
     game.currentRound = {
-      questionerId: game.players[game.currentQuestionerIndex].id,
+      questionerId: game.players[nextIndex].id,
       question: "",
       votes: [],
     };

@@ -6,6 +6,8 @@ import {
   submitVote,
   checkAndAdvanceRound,
   endGame,
+  addPhantomPlayer,
+  removePhantomPlayer,
 } from "@/lib/gameStore";
 
 export async function GET(request: NextRequest) {
@@ -39,13 +41,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(game);
     }
 
+    case "add-phantom": {
+      if (!lobbyCode || !playerName) {
+        return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+      }
+      const game = await addPhantomPlayer(lobbyCode, playerName);
+      if (!game) {
+        return NextResponse.json({ error: "Cannot add player" }, { status: 400 });
+      }
+      return NextResponse.json(game);
+    }
+
+    case "remove-phantom": {
+      if (!lobbyCode || !playerId) {
+        return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+      }
+      const game = await removePhantomPlayer(lobbyCode, playerId);
+      if (!game) {
+        return NextResponse.json({ error: "Cannot remove player" }, { status: 400 });
+      }
+      return NextResponse.json(game);
+    }
+
     case "start": {
       if (!lobbyCode) {
         return NextResponse.json({ error: "Lobby code required" }, { status: 400 });
       }
       const game = await startGame(lobbyCode);
       if (!game) {
-        return NextResponse.json({ error: "Cannot start game" }, { status: 400 });
+        return NextResponse.json({ error: "Need at least 2 real players to start" }, { status: 400 });
       }
       return NextResponse.json(game);
     }

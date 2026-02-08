@@ -2,6 +2,7 @@ export interface Player {
   id: string;
   name: string;
   isHost: boolean;
+  isPhantom?: boolean; // Phantom players can be voted on but don't vote themselves
 }
 
 export interface Vote {
